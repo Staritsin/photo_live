@@ -1,0 +1,35 @@
+# === Основное ядро ===
+python-telegram-bot[webhooks]==21.5
+pydantic==2.9.2
+pydantic-settings==2.3.4
+python-dotenv==1.0.1
+
+# === Асинхронные БД ===
+SQLAlchemy==2.0.34
+asyncpg==0.29.0
+aiosqlite==0.19.0
+
+# === Google Sheets ===
+gspread==6.0.2
+google-auth==2.41.1
+google-auth-oauthlib==1.2.2
+requests-oauthlib==2.0.0
+
+# === Утилиты ===
+aiohttp==3.9.5
+httpx==0.27.0
+cachetools==5.5.0
+
+# === Логирование и время ===
+colorama==0.4.6
+tzdata==2024.1
+
+# === Прочие интеграции ===
+requests==2.32.3
+replicate==0.22.0
+
+# === Для FAL / внешних API ===
+fal_client==0.4.0
+
+# === Дополнительно (если используешь Pillow, OpenCV и т.д.) ===
+Pillow==10.3.0

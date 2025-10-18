@@ -1,0 +1,38 @@
+# === Python cache ===
+__pycache__/
+*.pyc
+*.pyo
+
+# === Virtual environment ===
+.venv/
+env/
+venv/
+
+# === Local databases ===
+*.db
+local.db
+
+# === Environment variables ===
+.env
+*.env
+
+# === Google credentials ===
+gcp_sa.json
+
+# === Logs and temp files ===
+*.log
+tmp/
+temp/
+*.tmp
+
+# === System files ===
+.DS_Store
+.idea/
+.vscode/
+
+
+
+# === Render / Railway build artifacts ===
+*.bak
+*.pid
+*.sqlite3
