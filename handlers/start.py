@@ -77,11 +77,18 @@ PRIVACY_POLICY_URL = "https://clck.ru/3PEqbo"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    start_time = time.perf_counter()  # 🚀 старт замера
+    start_time = time.perf_counter()
     tg_user = update.effective_user
     chat_id = update.effective_chat.id
     print(f"🚀 /start от {tg_user.username or tg_user.id}")
 
+    # 👇 гарантируем объект message даже при callback / webhook
+    if update.message:
+        send = update.message.reply_text
+    else:
+        send = update.effective_chat.send_message
+
+    await send("👋 Бот запущен, проверяем связь с сервером... 🔥")
 
     # ⚙️ создаём или обновляем пользователя в фоне
     asyncio.create_task(billing_core.upsert_user(tg_user.id, tg_user.username))
