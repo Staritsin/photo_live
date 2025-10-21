@@ -216,6 +216,17 @@ def setup_shutdown_signal():
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown_tasks()))
 
+async def auto_set_webhook(app: Application):
+    RAILWAY_URL = os.getenv("RAILWAY_STATIC_URL") or "https://photo-live.up.railway.app"
+    webhook_url = f"{RAILWAY_URL}/webhook"
+
+    current = await app.bot.get_webhook_info()
+    if current.url != webhook_url:
+        await app.bot.set_webhook(url=webhook_url)
+        print(f"✅ Webhook обновлён: {webhook_url}")
+    else:
+        print(f"✅ Webhook уже актуален: {webhook_url}")
+
 
 
 # === 8. Точка входа ===
@@ -224,15 +235,14 @@ if __name__ == "__main__":
     app.post_init = on_startup
     setup_shutdown_signal()
 
-    # === определяем домен Railway ===
-    RAILWAY_URL = os.getenv("RAILWAY_STATIC_URL") or "https://photo-live.up.railway.app"
+    async def run():
+        await auto_set_webhook(app)
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=int(os.getenv("PORT", 8080)),
+            url_path="webhook",
+            webhook_url=f"{os.getenv('RAILWAY_STATIC_URL') or 'https://photo-live.up.railway.app'}/webhook"
+        )
 
-    # === включаем webhook ===
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.getenv("PORT", 8080)),
-        url_path="webhook",  # <--- добавили
-        webhook_url=f"{RAILWAY_URL}/webhook"
-    )
-
+    asyncio.run(run())
 
