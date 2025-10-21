@@ -227,10 +227,11 @@ async def auto_set_webhook(app: Application):
 
 
 
-# === 8. Точка входа (надёжная версия для Railway) ===
+# === 8. Точка входа (финальная, безопасная для Railway) ===
 from fastapi import FastAPI, Request
 import uvicorn
 from telegram import Update as TgUpdate
+from threading import Thread
 
 fastapi_app = FastAPI()
 ptb_app: Application | None = None  # PTB-приложение (глобальная ссылка)
@@ -248,6 +249,7 @@ async def webhook_handler(req: Request):
 async def root():
     return {"status": "ok", "message": "Bot is running"}
 
+
 async def main():
     global ptb_app
     ptb_app = build_app()
@@ -258,28 +260,20 @@ async def main():
     await ptb_app.bot.set_webhook(url=f"{os.getenv('BASE_PUBLIC_URL')}/webhook")
     print(f"✅ Webhook set to {os.getenv('BASE_PUBLIC_URL')}/webhook")
 
-    # Поднимаем uvicorn HTTP сервер
-    uvicorn.run(fastapi_app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
+    # 🚀 тут не uvicorn.run(), а просто оставляем бот активным
+    await asyncio.Event().wait()  # держим loop живым
 
 
 if __name__ == "__main__":
     import nest_asyncio
     nest_asyncio.apply()
 
-    loop = asyncio.get_event_loop()
-    try:
-        # запускаем FastAPI сервер в отдельном таске
-        from threading import Thread
-        def run_server():
-            uvicorn.run("main:fastapi_app", host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
+    # 💡 запускаем uvicorn в отдельном потоке
+    def run_server():
+        uvicorn.run("main:fastapi_app", host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
 
-        Thread(target=run_server, daemon=True).start()
+    Thread(target=run_server, daemon=True).start()
 
-        # запускаем бота
-        loop.run_until_complete(main())
-
-    except (KeyboardInterrupt, SystemExit):
-        print("🛑 Завершение работы бота...")
-
+    asyncio.run(main())
 
 
