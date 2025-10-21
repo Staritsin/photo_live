@@ -1,4 +1,5 @@
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, text
+
 from db.models import User, Referral
 from db.database import get_session
 from datetime import datetime
@@ -26,12 +27,15 @@ async def add_referral(inviter_id: int, invited_id: int):
             created_at=datetime.utcnow()
         ))
 
-        # увеличиваем счётчик у пригласившего
-        inviter = await session.get(User, inviter_id)
-        if inviter:
-            inviter.referrals_count += 1
-        
+        # 🧩 === UPDATE REFERRER ===
+        await session.execute(text("""
+            UPDATE users
+            SET referrals_count = COALESCE(referrals_count, 0) + 1
+            WHERE id = :referrer_id
+        """), {"referrer_id": inviter_id})
+
         await session.commit()
+
 
 # === Статистика по рефералам ===
 async def get_referral_stats(user_id: int):

@@ -7,7 +7,11 @@ from .utils import send_or_replace_text
 async def open_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Открывает поддержку из кнопки"""
     q = update.callback_query
-    await q.answer()
+    try:
+        await q.answer()
+    except Exception:
+        pass
+
     kb = InlineKeyboardMarkup(
         [[InlineKeyboardButton("💬 Чат с поддержкой", url=settings.support_chat_url)]]
     )

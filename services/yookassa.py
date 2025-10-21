@@ -4,6 +4,7 @@ from yookassa import Configuration, Payment
 from config import settings
 from db.database import get_session
 from db.models import Payment as PaymentModel  # SQLAlchemy модель
+import asyncio
 
 # --- Инициализация SDK ---
 Configuration.account_id = settings.yookassa_shop_id
@@ -24,6 +25,26 @@ async def create_payment(
     order_id: str,
     customer_email: str = "test@example.com"
 ):
+    from sqlalchemy import select
+    from db.models import User
+    from services.billing_core import upsert_user
+
+    async with get_session() as session:
+        user = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+
+        if not user:
+            print(f"⚙️ Пользователь {user_id} не найден — создаю...")
+            await upsert_user(user_id, "")
+            await asyncio.sleep(0.3)
+            # 🧩 теперь проверяем повторно уже с user_id
+            user = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+
+            if user:
+                print(f"✅ Пользователь {user_id} успешно добавлен в users.")
+            else:
+                print(f"❌ Ошибка: пользователь {user_id} так и не появился в таблице users.")
+
+
     body = {
         "amount": {
             "value": _rub(amount_rub),
@@ -69,7 +90,22 @@ async def create_payment(
     payment_id = payment.id
     confirmation_url = payment.confirmation.confirmation_url
 
+    # 🧩 Перед записью в payments — убедимся, что user реально есть
+    from sqlalchemy import select
+    from db.models import User
+
     async with get_session() as session:
+        for _ in range(10):
+            user_exists = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+            if user_exists:
+                print(f"✅ Пользователь {user_id} подтверждён в базе, создаём платёж.")
+                break
+            await asyncio.sleep(0.3)
+        else:
+            print(f"❌ Пользователь {user_id} так и не появился в users — платеж не создаётся.")
+            return None, None, None
+
+        # ✅ Теперь точно создаём платеж
         p = PaymentModel(
             user_id=user_id,
             amount=amount_rub,
@@ -82,7 +118,9 @@ async def create_payment(
         session.add(p)
         await session.commit()
 
+    # 🟢 Возвращаем данные, чтобы бот открыл оплату
     return payment_id, confirmation_url, order_id
+
 
 
 def get_payment_status(payment_id: str) -> str:

@@ -1,8 +1,12 @@
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaVideo
 from telegram.ext import ContextTypes
 import asyncio
+import time
 
+from services.performance_logger import measure_time
 from sqlalchemy import select
+from sqlalchemy import text as sql_text
+
 
 from config import settings
 from db.database import get_session
@@ -14,10 +18,15 @@ from services.billing_core import calc_generations
 from services import billing_core
 from db.repo import get_referral_stats, has_generations
 
+from pathlib import Path
+FILE_ID_PATH = Path("assets/main_menu_video.id")
+
+
 
 
 
 # Главное меню
+@measure_time
 def main_menu_kb(user) -> InlineKeyboardMarkup:
     buttons = []
 
@@ -29,19 +38,19 @@ def main_menu_kb(user) -> InlineKeyboardMarkup:
 
 
 # Проверка/создание пользователя
+@measure_time
 async def ensure_user(update: Update) -> User:
     user_tg = update.effective_user
 
     async with get_session() as session:
 
-        result = await session.execute(select(User).where(User.user_id == user_tg.id))
+        result = await session.execute(select(User).where(User.id == user_tg.id))
         user = result.scalar_one_or_none()
 
         if not user:
             # 🔹 Новый пользователь
             user = User(
                 id=user_tg.id,
-                user_id=update.effective_user.id,
                 full_name=user_tg.full_name,
                 username=user_tg.username,
                 balance=0,
@@ -67,101 +76,101 @@ USER_AGREEMENT_URL = "https://clck.ru/3PEqg8"
 PRIVACY_POLICY_URL = "https://clck.ru/3PEqbo"
 
 
-# /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    start_time = time.perf_counter()  # 🚀 старт замера
     tg_user = update.effective_user
-
-    # 1. billing_core
-    user_gen = await billing_core.upsert_user(tg_user.id, tg_user.username)
-
-    # ✅ если вдруг вернулся coroutine — дожидаемся его
-    if asyncio.iscoroutine(user_gen):
-        user_gen = await user_gen
+    chat_id = update.effective_chat.id
+    print(f"🚀 /start от {tg_user.username or tg_user.id}")
 
 
+    # ⚙️ создаём или обновляем пользователя в фоне
+    asyncio.create_task(billing_core.upsert_user(tg_user.id, tg_user.username))
+    asyncio.create_task(gsheets.log_user_event(
+        user_id=tg_user.id, username=tg_user.username or "", event="start_pressed"
+    ))
 
-
-    # --- проверка есть ли реф ---
+    # --- Проверка есть ли реферал ---
     args = context.args
     if args and args[0].startswith("ref"):
         referrer_id = int(args[0].replace("ref", ""))
-        if referrer_id != tg_user.id:  # нельзя самому себе
-            # 🔹 сохраняем в БД
+        if referrer_id != tg_user.id:
             from db.repo import add_referral
             await add_referral(inviter_id=referrer_id, invited_id=tg_user.id)
-
-            # 🔹 логируем в Google Sheets (только для наглядности)
             asyncio.create_task(gsheets.log_referral(
-                referrer_id=referrer_id,
-                new_user_id=tg_user.id,
-                status="registered"
+                referrer_id=referrer_id, new_user_id=tg_user.id, status="registered"
             ))
 
-    # 2. SQLAlchemy (согласие)
+    # --- Создаём или обновляем запись в Postgres ---
     async with get_session() as session:
-        # Проверяем, есть ли уже пользователь с таким user_id
-        result = await session.execute(select(User).where(User.user_id == tg_user.id))
+        result = await session.execute(select(User).where(User.id == tg_user.id))
         user_db = result.scalar_one_or_none()
 
-        if user_db:
-            print(f"⚡️ Пользователь уже существует ({tg_user.id}) — обновляю данные")
-            user_db.full_name = tg_user.full_name
-            user_db.username = tg_user.username
-            await session.commit()
-        else:
-            print("🆕 СОЗДАЮ НОВОГО ПОЛЬЗОВАТЕЛЯ")
+        if not user_db:
+            # 🔹 если юзера нет — создаём
             user_db = User(
                 id=tg_user.id,
-                user_id=tg_user.id,
                 full_name=tg_user.full_name,
                 username=tg_user.username,
-                balance=0,  # 🎁 стартовый баланс
+                balance=0,
                 consent_accepted=False,
             )
             session.add(user_db)
-            await session.commit()
-            print(f"👤 Новый пользователь создан: {tg_user.id} ({tg_user.username})")
+            print(f"🆕 Создан новый пользователь {tg_user.username or tg_user.id}")
+        else:
+            # 🔹 если есть — обновляем данные
+            user_db.full_name = tg_user.full_name
+            user_db.username = tg_user.username
+            print(f"♻️ Обновлён пользователь {tg_user.username or tg_user.id}")
 
-            # Логируем нового пользователя в Google Sheets
-            asyncio.create_task(gsheets.log_unique_user(
-                user_id=tg_user.id,
-                username=tg_user.username or "",
-                full_name=tg_user.full_name or ""
-            ))
+        await session.commit()
 
-            asyncio.create_task(gsheets.log_user_event(
-                user_id=tg_user.id,
-                username=tg_user.username or "",
-                event="start_registered",
-                meta={"balance": user_db.balance}
-            ))
+        # 🔹 возвращаем финальный объект после сохранения
+        result = await session.execute(select(User).where(User.id == tg_user.id))
+        user_db = result.scalar_one()
 
 
+        # === AUTO UPSERT USER (создание/обновление в основной таблице) ===
+        await session.execute(sql_text("""
+            INSERT INTO users (id, username, full_name, created_at)
+            VALUES (:id, :username, :full_name, NOW())
+            ON CONFLICT (id) DO UPDATE 
+            SET username = EXCLUDED.username,
+                full_name = EXCLUDED.full_name,
+                last_active_at = NOW();
+        """), {
+            "id": tg_user.id,
+            "username": tg_user.username,
+            "full_name": tg_user.full_name
+        })
+        await session.commit()
 
-    # Лог входа
-    asyncio.create_task(gsheets.log_user_event(
-        user_id=user_gen.user_id,
-        username=user_gen.username or "",
-        event="start",
-        meta={"generations_balance": user_gen.generations_balance}
-    ))
 
-    if not user_db.consent_accepted:
+    # === ПОСЛЕ СОХРАНЕНИЯ user_db ===
+    if user_db.consent_accepted:
+        # ⚡ Если согласие уже есть — сразу показываем меню
+        await show_main_menu(update, context, user_db)
+    else:
+        # ⚡ Если согласия нет — показываем только кнопку
         text = (
-            "Пожалуйста ознакомьтесь с документами перед началом:\n\n"
+            "👋 Привет! Я помогу оживить твои фото.\n\n"
+            "Перед началом ознакомься с документами:\n\n"
             f"📄 Пользовательское соглашение:\n{USER_AGREEMENT_URL}\n\n"
-            f"🔒 Политика конфиденциальности:\n{PRIVACY_POLICY_URL}"
+            f"🔒 Политика конфиденциальности:\n{PRIVACY_POLICY_URL}\n\n"
+            "Нажми «✅ Согласен», чтобы начать 🔥"
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Согласен", callback_data="consent_yes")]])
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Согласен", callback_data="consent_yes")]
+        ])
         await send_or_replace_text(update, context, text, reply_markup=kb)
-        return
+        print(f"⚡️ Время выполнения start(): {time.perf_counter() - start_time:.2f} сек")
 
-    # показываем главное меню
-    await show_main_menu(update, context, user_gen)
+
 
 
 # Главное меню
+@measure_time
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user):
+    start_time = time.perf_counter()
     gen_price = settings.price_rub
     packs = settings.packs
     
@@ -171,13 +180,14 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, use
     async with get_session() as session:
 
         udb = (await session.execute(
-            select(User).where(User.user_id == user.user_id)
+            select(User).where(User.id == update.effective_user.id)
         )).scalar_one()
 
         paid_balance = int(udb.balance)                # что реально списывается
 
     # сколько всего начислено за рефералов (информативно, не "остаток")
-    invited_total, invited_paid = await get_referral_stats(user.user_id)
+    invited_total, invited_paid = await get_referral_stats(user.id)
+
     bonus_total = invited_paid * settings.bonus_per_friend
 
     total_available = paid_balance + bonus_total
@@ -210,7 +220,8 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, use
     )
 
     # ---- кнопки ----
-    invite_link = f"https://t.me/Photo_AliveBot?start=ref{user.user_id}"
+    invite_link = f"https://t.me/Photo_AliveBot?start=ref{user.id}"
+
 
     # 💡 динамическая кнопка — если баланс 0 → показать цену
     if total_available == 0:
@@ -225,54 +236,93 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, use
         [InlineKeyboardButton("📖 Инструкция", callback_data="instruction")],
         [InlineKeyboardButton(
             "🤝 Пригласить друга",
-            switch_inline_query=f"🔥 Попробуй оживить фото! Это моя ссылка: {invite_link}"
+            switch_inline_query=f"🔥 Попробуй оживить фото! Я тебя приглашаю: {invite_link}"
         )],
     ])
 
-    # ---- отправка ----
+        # ---- отправка ----
     video_path = "assets/main_menu_video.mp4"
+
     try:
-        await update.effective_chat.send_video(
-            video=open(video_path, "rb"),
-            caption=text,
-            parse_mode="Markdown",
-            reply_markup=kb
-        )
-    except Exception:
+        # если уже знаем file_id — шлём мгновенно, без загрузки файла
+        if FILE_ID_PATH.exists():
+            file_id = FILE_ID_PATH.read_text().strip()
+            msg = await update.effective_chat.send_video(
+                video=file_id,
+                caption=text,
+                parse_mode="Markdown",
+                reply_markup=kb
+            )
+        else:
+            # первый раз — загрузим файл, возьмём file_id и закэшируем
+            msg = await update.effective_chat.send_video(
+                video=open(video_path, "rb"),
+                caption=text,
+                parse_mode="Markdown",
+                reply_markup=kb
+            )
+            try:
+                fid = msg.video.file_id
+                FILE_ID_PATH.write_text(fid)
+                print(f"💾 Saved main_menu_video file_id: {fid}")
+            except Exception as e:
+                print("⚠️ Не удалось сохранить file_id:", e)
+
+    except Exception as e:
+        print("⚠️ send_video fallback:", e)
         await send_or_replace_text(update, context, text, reply_markup=kb)
 
-# Обработка согласия
+    print(f"⚡️ Время выполнения show_main_menu(): {time.perf_counter() - start_time:.2f} сек")
+
+
+# === Обработка согласия ===
 async def handle_consent_yes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from sqlalchemy import select
     q = update.callback_query
-    await q.answer()
+    try:
+        await q.answer()
+    except Exception:
+        pass
+
+    user_gen = None
+
 
     async with get_session() as session:
+        result = await session.execute(select(User).where(User.id == q.from_user.id))
+        user = result.scalar_one_or_none()
+        if user and not user.consent_accepted:
+            user.consent_accepted = True
+            await session.commit()
+            print(f"✅ Пользователь {user.id} принял соглашение")
 
-        result = await session.execute(select(User).where(User.user_id == q.from_user.id))
-        user = result.scalar_one()
-        user.consent_accepted = True
-        await session.commit()
 
-        # Показываем главное меню (через billing_core)
-        user_gen = billing_core.get_user(q.from_user.id)
-        await show_main_menu(update, context, user_gen)
+            asyncio.create_task(gsheets.log_user_event(
+                user_id=q.from_user.id,
+                username=q.from_user.username or "",
+                event="consent_accepted"
+            ))
 
+    # 🚀 Показываем главное меню (без двойного вызова)
+    await show_main_menu(update, context, user or q.from_user)
 
 # Проверка баланса при нажатии "Оживить фото"
+@measure_time
 async def check_balance_and_animate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    try:
+        await q.answer()
+    except Exception:
+        pass
 
     user_id = q.from_user.id
 
     # Лог в Google Sheets: нажал кнопку "Оживить фото"
-    asyncio.create_task(gsheets.log_user_event(
-        user_id=user_id,
-        username=q.from_user.username or "",
-        event="click_animate",
-        meta={}
-    ))
+    if gsheets.ENABLED:
+        asyncio.create_task(gsheets.log_user_event(
+            user_id=user_id,
+            username=q.from_user.username or "",
+            event="click_animate",
+            meta={}
+        ))
 
     # Проверяем баланс генераций (через has_generations)
     if not await has_generations(user_id):
@@ -297,7 +347,7 @@ async def check_balance_and_animate(update: Update, context: ContextTypes.DEFAUL
 async def reset_consent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from sqlalchemy import select
     async with get_session() as session:
-        result = await session.execute(select(User).where(User.user_id == update.effective_user.id))
+        result = await session.execute(select(User).where(User.id == update.effective_user.id))
         user = result.scalar_one()
         user.consent_accepted = False
         await session.commit()

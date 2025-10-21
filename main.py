@@ -3,11 +3,18 @@ import time
 start_time = time.perf_counter()
 
 import os
+from services.performance_logger import measure_time
+
+
+from config import settings
+
+
 import asyncio
 import signal
 import logging
 from pathlib import Path
 from dotenv import load_dotenv
+from middlewares.safe_callbacks import SafeCallbackMiddleware
 
 # === 1. Логи (чистые, без мусора) ===
 logging.basicConfig(
@@ -22,7 +29,6 @@ logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
-from config import settings
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 )
@@ -64,6 +70,18 @@ print("DEBUG PRICE:", settings.price_rub)
 def build_app() -> Application:
     app = Application.builder().token(settings.telegram_bot_token).build()
 
+    # Глобальная защита от "Query is too old"
+    async def safe_callback_answer(update, context):
+        if update.callback_query:
+            try:
+                await update.callback_query.answer()
+            except Exception:
+                pass
+        return True
+
+    app.add_handler(MessageHandler(filters.ALL, safe_callback_answer), group=-1)
+
+
     # Команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset_consent))
@@ -92,12 +110,21 @@ def build_app() -> Application:
     # Назад в меню
     async def back_menu(update, context):
         q = update.callback_query
-        await q.answer()
+        try:
+            await q.answer()
+        except Exception:
+            pass
         user = await ensure_user(update)
-        await show_main_menu(update, context, user)
+        await show_main_menu(update, context, user or update.effective_user)
 
+
+    
     app.add_handler(CallbackQueryHandler(back_menu, pattern=r"^back_menu$"))
+    from utils.metrics import wrap_all_handlers
+    # 🔎 вешаем глобальный тайминг на все уже зарегистрированные хендлеры
+    wrap_all_handlers(app)
     return app
+
 
 
 # === 5. Speed test ===
@@ -114,19 +141,38 @@ async def on_startup(app: Application):
     asyncio.create_task(init_db())
     print("✅ DB init task started")
 
-    if settings.gsheets_enable:
-        print("✅ Google Sheets включены")
-        # ⚡️ Запускаем фоновые записи без ожидания
+    # === Google Sheets ===
+    if gsheets.ENABLED:
+        print("✅ Google Sheets включены (GSHEETS_ENABLE=1)")
         asyncio.create_task(gsheets.start_background_flush())
     else:
-        print("⚠️ Google Sheets выключены")
+        print("⚠️ Google Sheets выключены (GSHEETS_ENABLE=0)")
 
-    # ⚡️ Всё остальное — тоже в фоне, не блокирует интерфейс
-    asyncio.create_task(sync_dashboard_once())
-    asyncio.create_task(auto_loop())
+    # === Dashboard ===
+    if gsheets.ENABLED:
+        asyncio.create_task(auto_loop())
+        print("✅ Dashboard включен (GSHEETS_ENABLE=1)")
+    else:
+        print("⚠️ Dashboard выключен (GSHEETS_ENABLE=0)")
+
+    # 🚀 Убираем задержки от debug-loop
+    asyncio.get_event_loop().set_debug(False)
 
     await speed_test()
     print("🚀 Startup complete")
+
+    # === Сводка статусов при старте ===
+    print("\n================= SYSTEM STATUS =================")
+    print(f"🧩 Database...........: {'PostgreSQL (Railway)' if settings.use_postgres else 'SQLite (Local Mode)'}")
+    print(f"📊 Google Sheets......: {'ON ✅ (GSHEETS_ENABLE=1)' if gsheets.ENABLED else 'OFF ⚠️ (GSHEETS_ENABLE=0)'}")
+    print(f"📈 Dashboard..........: {'ON ✅' if gsheets.ENABLED else 'OFF ⚠️'}")
+    print(f"💳 Payments...........: {settings.payment_provider} ({settings.payment_mode})")
+    print(f"💰 Price per gen......: {settings.price_rub} ₽")
+    print(f"🎁 Free trial.........: {'1 генерация' if getattr(settings, 'free_trial_gens', 1) else '—'}")
+    print(f"🎉 Bonus policy.......: +{getattr(settings, 'bonus_per_friend', 1)} за друга / +{getattr(settings, 'bonus_per_10', 2)} за 10 оплат")
+    print(f"📦 Packs available....: {', '.join([f'{p}₽' for p in settings.packs])}")
+    print(f"⚙️  Engine Mode........: {'Production 🚀' if settings.payment_mode.upper() == 'PROD' else 'Test 🧪'}")
+    print("=================================================\n")
 
 
 
@@ -152,6 +198,7 @@ def setup_shutdown_signal():
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown_tasks()))
+
 
 
 # === 8. Точка входа ===

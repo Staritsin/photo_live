@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from services import yookassa as yk
 from db.repo import get_referral_stats
+from services.performance_logger import measure_time
 
 
 # ============ Создание платежа ============
@@ -74,15 +75,22 @@ async def add_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ============ Главное меню пополнения ============
 
-
+@measure_time
 async def open_balance(update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    try:
+        await q.answer()
+    except Exception:
+        pass
 
     async with get_session() as session:
 
         result = await session.execute(select(User).where(User.id == q.from_user.id))
-        user = result.scalar_one()
+
+        user = result.scalar_one_or_none()
+        if not user:
+            return await send_or_replace_text(update, context, "⚠️ Пользователь не найден, попробуйте /start")
+
 
         # лог в Google Sheets
         asyncio.create_task(gsheets.log_user_event(
@@ -150,10 +158,21 @@ async def open_balance(update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 # ===== Создание ссылки на оплату =====
-
+@measure_time
 async def create_topup(update, context: ContextTypes.DEFAULT_TYPE, amount: int):
     q = update.callback_query
-    await q.answer()
+    try:
+        await q.answer()
+    except Exception:
+        pass
+
+    # 🧩 Гарантируем, что пользователь есть в БД перед оплатой
+    from services.billing_core import upsert_user
+    user_id = q.from_user.id
+    username = q.from_user.username or ""
+    await upsert_user(user_id, username)
+
+
 
     description = "Пополнение генераций"
     provider = settings.payment_provider.upper()  # TINKOFF | YOOKASSA
@@ -263,21 +282,29 @@ async def create_topup(update, context: ContextTypes.DEFAULT_TYPE, amount: int):
 # ===== Обработчик топапов (универсальный) =====
 async def handle_topup(update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
+    try:
+        await q.answer()
+    except Exception:
+        pass
     _, amount = q.data.split(":", 1)
     await create_topup(update, context, int(amount))
 
 
-
+@measure_time
 # ===== Проверка платежа =====
 async def check_payment(update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    try:
+        await q.answer()
+    except Exception:
+        pass
     _, pay_id = q.data.split(":", 1)
 
     # достаём платёж из базы
     async with get_session() as session:
         payment = (await session.execute(
             select(Payment).where(Payment.provider_payment_id == pay_id)
+            
         )).scalar_one_or_none()
 
         if not payment:
@@ -312,13 +339,14 @@ async def check_payment(update, context: ContextTypes.DEFAULT_TYPE):
     ))
 
     # успешный платёж
-    if status in ["CONFIRMED", "AUTHORIZED"]:
+    if status in ["CONFIRMED", "AUTHORIZED", "SUCCEEDED"]:
+
         async with get_session() as session:
             payment = (await session.execute(
                 select(Payment).where(Payment.provider_payment_id == pay_id)
             )).scalar_one_or_none()
 
-            if payment and payment.status not in ["CONFIRMED", "AUTHORIZED"]:
+            if payment and payment.status not in ["CONFIRMED", "AUTHORIZED", "SUCCEEDED"]:
                 payment.status = status
                 user = (await session.execute(
                     select(User).where(User.id == q.from_user.id)
@@ -374,7 +402,14 @@ async def check_payment(update, context: ContextTypes.DEFAULT_TYPE):
                         inv_total, inv_paid = await get_referral_stats(ref_user.id)
                         bonus_total = inv_paid * settings.bonus_per_friend
                         asyncio.create_task(gsheets.update_referrals_summary(ref_user.id, inv_total, inv_paid, bonus_total))
-
+                        # 💬 Уведомляем пригласителя о бонусе
+                        try:
+                            await context.bot.send_message(
+                                chat_id=ref_user.id,
+                                text=f"🎉 Ваш друг оплатил! Вам начислена +{settings.bonus_per_friend} генерация 💎"
+                            )
+                        except Exception as e:
+                            print(f"⚠️ Не удалось отправить уведомление пригласителю {ref_user.id}: {e}")
 
 
         # ещё раз берём актуального юзера из БД, чтобы баланс был свежий
@@ -401,6 +436,7 @@ async def check_payment(update, context: ContextTypes.DEFAULT_TYPE):
 async def reset_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with get_session() as session:
         result = await session.execute(select(User).where(User.id == update.effective_user.id))
+
         user = result.scalar_one()
         old = int(user.balance)  # старое количество генераций
         user.balance = 0  # обнуляем
@@ -465,7 +501,7 @@ async def compensate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============ Проверка баланса пользователя (для админа) ============
-
+@measure_time
 async def get_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда для админа: /get_balance <user_id> — выводит полные данные о пользователе"""
 
@@ -540,7 +576,7 @@ async def get_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ============ Сброс пробной генерации ============
 from handlers.start import show_main_menu   # если не импортирован — добавь
 
-
+@measure_time
 async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает баланс, рефералку и ссылку на приглашение"""
     user_id = update.effective_user.id
@@ -550,6 +586,7 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with get_session() as session:
         user = (await session.execute(
             select(User).where(User.id == user_id)
+
         )).scalar_one_or_none()
 
         if not user:

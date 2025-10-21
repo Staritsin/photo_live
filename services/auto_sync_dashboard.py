@@ -103,7 +103,7 @@ def get_or_create_dashboard():
     return ws
 
 
-async def sync_dashboard_once():
+def _sync_dashboard_once_sync():
     ws = get_or_create_dashboard()
 
     # === Данные из других листов ===
@@ -196,7 +196,7 @@ async def sync_dashboard_once():
         elif e_orders > 0 and g_pays == 0:
             color = COLOR_RED
         fmt.append({"range": f"A{idx}:P{idx}", "format": {"backgroundColor": color}})
-
+    # 🧩 вызываем update один раз, пачкой
     ws.update(f"A{START_ROW}", rows, value_input_option="USER_ENTERED")
     if fmt:
         ws.batch_format(fmt)
@@ -204,11 +204,18 @@ async def sync_dashboard_once():
     print(f"✅ Dashboard обновлён: {len(rows)} строк ({now_str})")
 
 
+async def sync_dashboard_once():
+    await asyncio.to_thread(_sync_dashboard_once_sync)
+
+
 async def auto_loop():
     print(f"🚀 Auto Dashboard запущен (каждые {REFRESH_SECONDS // 60} мин)")
+    # 💤 Первая пауза после старта (чтобы не грузить бот)
+    await asyncio.sleep(30)
+
     while True:
         try:
-            await asyncio.to_thread(sync_dashboard_once)
+            await sync_dashboard_once()
         except Exception as e:
             print(f"❌ Ошибка Dashboard: {e}")
         await asyncio.sleep(REFRESH_SECONDS)

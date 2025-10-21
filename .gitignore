@@ -18,9 +18,12 @@ local.db
 
 # === Google credentials ===
 gcp_sa.json
+credentials.json
+service_account.json
 
 # === Logs and temp files ===
 *.log
+*.csv
 tmp/
 temp/
 *.tmp
@@ -30,9 +33,19 @@ temp/
 .idea/
 .vscode/
 
-
-
 # === Render / Railway build artifacts ===
 *.bak
 *.pid
 *.sqlite3
+
+# === Media / Large assets ===
+*.mp4
+*.mov
+*.avi
+*.zip
+*.tar
+*.gz
+
+# === Test files ===
+test_*.py
+performance_*.csv

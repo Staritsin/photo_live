@@ -4,6 +4,9 @@ import tempfile
 import os
 import asyncio
 
+from db.models import User, GenerationRaw
+
+
 from config import settings
 from db.database import get_session
 from db.models import User
@@ -46,7 +49,11 @@ async def start_animate_flow(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "Загрузите фото сейчас и почувствуйте магию! 🪄\n"
     )
     if update.callback_query:
-        await update.callback_query.answer()
+        try:
+            await update.callback_query.answer()
+        except Exception:
+            pass
+
         await update.callback_query.message.reply_text(text, reply_markup=back_menu_kb())
     else:
         await update.message.reply_text(text, reply_markup=back_menu_kb())
@@ -147,11 +154,13 @@ async def on_prompt_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         meta={"prompt": prompt_text[:120]}
     ))
     
-import asyncio
 
 async def on_animate_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    try:
+        await q.answer()
+    except Exception:
+        pass
 
     # лог: нажал кнопку подтверждения генерации
     asyncio.create_task(gsheets.log_user_event(
@@ -179,15 +188,24 @@ async def on_animate_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def run_generation_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
+    try:
+        await q.answer()
+    except Exception:
+        pass
+
     user_id = q.from_user.id
     prompt_text = context.user_data.get(PROMPT_KEY)
     photo_path = context.user_data.get("last_photo_path")
 
+
     async with get_session() as session:
         from sqlalchemy import select
         result = await session.execute(select(User).where(User.id == user_id))
-        user = result.scalar_one()
-
+        user = result.scalar_one_or_none()
+        if not user:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Пользователь не найден в базе.")
+            return  
+        
         # 💰 Проверка баланса
         if user.balance <= 0:
             await context.bot.send_message(
@@ -247,12 +265,30 @@ async def run_generation_task(update: Update, context: ContextTypes.DEFAULT_TYPE
                         reply_markup=kb
                     )
 
+                    video_file_id = msg.video.file_id if msg and msg.video else ""
+
+
                     # 💾 Списание и логирование
                     old = int(user.balance)
                     user.balance -= 1
-                    await session.commit()
+                    user.total_generations = (user.total_generations or 0) + 1
+                    await session.commit()  # ✅ фиксируем изменение баланса
 
-                    video_file_id = msg.video.file_id if msg and msg.video else ""
+
+                    # 💾 Запись генерации
+                    gen_entry = GenerationRaw(
+                        user_id=user.id,
+                        price_rub=float(settings.price_rub),
+                        input_type="photo",
+                        prompt=prompt_text[:1024],
+                        file_id=video_file_id,
+                    )
+                    session.add(gen_entry)
+                    await session.commit()  # ✅ фиксируем запись генерации
+
+
+
+
                     invited_total, invited_paid = await get_referral_stats(user.id)
                     referral_bonus = invited_paid * settings.bonus_per_friend
 
@@ -267,11 +303,13 @@ async def run_generation_task(update: Update, context: ContextTypes.DEFAULT_TYPE
 
                     asyncio.create_task(gsheets.log_generation(
                         user_id=user.id,
+                        username=user.username or "",
                         price_rub=float(settings.price_rub),
                         input_type="photo",
                         prompt=prompt_text,
                         file_id=video_file_id
                     ))
+
                     return
 
                 elif status["status"] == "failed":
@@ -307,7 +345,10 @@ async def run_generation_task(update: Update, context: ContextTypes.DEFAULT_TYPE
 # Вызываем основную генерацию при нажатии кнопки
 async def do_animate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    try:
+        await q.answer()
+    except Exception:
+        pass
 
     # проверяем, есть ли генерации
     if not await has_generations(q.from_user.id):

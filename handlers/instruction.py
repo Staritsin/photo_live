@@ -8,16 +8,20 @@ from .utils import send_or_replace_text
 from services.billing_core import calc_generations
 from db.database import get_session
 from db.models import User
-
+from sqlalchemy import select
 
 async def show_instruction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    try:
+        await q.answer()
+    except Exception:
+        pass
 
     # баланс юзера
     async with get_session() as session:
 
-        user = await session.get(User, q.from_user.id)
+        result = await session.execute(select(User).where(User.id == q.from_user.id))
+        user = result.scalar_one_or_none()
         balance = user.balance if user else 0
 
     price = settings.price_rub
@@ -61,9 +65,15 @@ async def show_instruction(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
     # при наличии видеоинструкции — прикрепляем видео отдельным сообщением
-    if settings.instruction_video_url:
+    video_url = getattr(settings, "instruction_video_url", "").strip()
+    if video_url:
         async with aiohttp.ClientSession() as sess:
-            async with sess.get(settings.instruction_video_url) as resp:
-                if resp.status == 200:
-                    data = await resp.read()
-                    await context.bot.send_video(chat_id=update.effective_chat.id, video=data)
+            try:
+                async with sess.get(video_url) as resp:
+                    if resp.status == 200:
+                        data = await resp.read()
+                        await context.bot.send_video(chat_id=update.effective_chat.id, video=data)
+                    else:
+                        print(f"⚠️ Видео не найдено (status {resp.status})")
+            except Exception as e:
+                print(f"⚠️ Ошибка загрузки видеоинструкции: {e}")

@@ -1,4 +1,8 @@
+
 import os
+
+from services.performance_logger import measure_time
+
 import json
 import time
 import aiohttp
@@ -8,13 +12,13 @@ import jwt
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
+from config import settings
 
 
-# === Загрузка .env ===
+# === Загружаем .env и включаем флаг ===
 load_dotenv()
+ENABLED = os.getenv("GSHEETS_ENABLE", "1") == "1"
 
-# === Конфигурация ===
-ENABLED = os.getenv("GSHEETS_ENABLE", "0") == "1"
 SPREADSHEET_ID = os.getenv("GSHEETS_SPREADSHEET_ID")
 CREDS_FILE = os.getenv("GSHEETS_CREDENTIALS_FILE", "./gcp_sa.json")
 
@@ -24,7 +28,7 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 # Московское время
 MOSCOW_TZ = timezone(timedelta(hours=3))
 
-
+@measure_time
 def now_iso() -> str:
     """Возвращает строку времени Москвы в формате `dd.mm.YYYY HH:MM:SS`, принудительно как текст."""
     return datetime.now(MOSCOW_TZ).strftime("'%d.%m.%Y %H:%M:%S")
@@ -39,9 +43,9 @@ _queue_rows: dict[str, list[list[t.Any]]] = defaultdict(list)
 _queue_headers: dict[str, list[str] | None] = {}
 _queue_lock = asyncio.Lock()
 _flush_task: asyncio.Task | None = None
-_FLUSH_INTERVAL = 5  # секунд
+_FLUSH_INTERVAL = 30  # секунд
 
-
+@measure_time
 def _safe_create_task(coro: t.Coroutine) -> None:
     try:
         loop = asyncio.get_running_loop()
@@ -50,7 +54,7 @@ def _safe_create_task(coro: t.Coroutine) -> None:
     else:
         loop.create_task(coro)
 
-
+@measure_time
 async def start_background_flush() -> None:
     if not ENABLED:
         return
@@ -62,7 +66,7 @@ async def start_background_flush() -> None:
     if _flush_task is None or _flush_task.done():
         _flush_task = loop.create_task(_flush_loop())
 
-
+@measure_time
 # === Авторизация ===
 def _load_sa() -> dict:
     if not CREDS_FILE or not os.path.exists(CREDS_FILE):
@@ -70,7 +74,7 @@ def _load_sa() -> dict:
     with open(CREDS_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
-
+@measure_time
 async def _get_access_token() -> str:
     now = int(time.time())
     if _token_cache["access_token"] and _token_cache["expires_at"] - 60 > now:
@@ -107,7 +111,7 @@ async def _get_access_token() -> str:
                 _token_cache["expires_at"] = now + int(j.get("expires_in", 3600))
                 return _token_cache["access_token"]
 
-
+@measure_time
 # === Универсальные функции ===
 async def _request_json(method: str, url: str, *, params=None, json_body=None):
     token = await _get_access_token()
@@ -120,13 +124,13 @@ async def _request_json(method: str, url: str, *, params=None, json_body=None):
                 raise RuntimeError(f"Sheets API {resp.status}: {data}")
             return data
 
-
+@measure_time
 async def _get_sheet_titles() -> set[str]:
     url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}"
     res = await _request_json("GET", url, params={"fields": "sheets(properties(title))"})
     return {s["properties"]["title"] for s in res.get("sheets", [])}
 
-
+@measure_time
 async def _ensure_sheet_exists(title: str, headers: list[str] | None = None):
     titles = await _get_sheet_titles()
     if title in titles:
@@ -139,20 +143,20 @@ async def _ensure_sheet_exists(title: str, headers: list[str] | None = None):
             {"range": f"{title}!A1:{chr(64 + len(headers))}1", "values": [headers]}
         ])
 
-
+@measure_time
 async def _enqueue_row(sheet_name: str, headers: list[str] | None, row: list[t.Any]) -> None:
     async with _queue_lock:
         if headers is not None:
             _queue_headers.setdefault(sheet_name, headers)
         _queue_rows[sheet_name].append(row)
 
-
+@measure_time
 def queue_append(sheet_name: str, headers: list[str] | None, row: list[t.Any]) -> None:
     if not ENABLED or not SPREADSHEET_ID:
         return
     _safe_create_task(_enqueue_row(sheet_name, headers, row))
 
-
+@measure_time
 async def _flush_once() -> None:
     async with _queue_lock:
         if not _queue_rows:
@@ -164,9 +168,10 @@ async def _flush_once() -> None:
         _queue_rows.clear()
 
     for sheet, (headers, rows) in pending.items():
+        print(f"📤 FLUSH → {sheet}: {len(rows)} строк (каждые {_FLUSH_INTERVAL} сек)")
         await append_rows_async(rows=rows, sheet_name=sheet, headers=headers, use_queue=False)
 
-
+@measure_time
 async def _flush_loop() -> None:
     while True:
         await asyncio.sleep(_FLUSH_INTERVAL)
@@ -175,7 +180,7 @@ async def _flush_loop() -> None:
         except Exception as exc:
             print(f"⚠️ GSHEETS queue flush error: {exc}")
 
-
+@measure_time
 # === Основная запись в Google Sheets ===
 async def append_rows_async(
     rows: list[list[t.Any]],
@@ -198,7 +203,7 @@ async def append_rows_async(
     print(f"📊 APPEND_ROWS: {sheet_name} ({len(rows)} строк)")
     return await _request_json("POST", url, params=params, json_body=body)
 
-
+@measure_time
 async def batch_update_values_async(data: list[dict]):
     if not ENABLED or not SPREADSHEET_ID:
         return {"disabled": True}
@@ -206,7 +211,7 @@ async def batch_update_values_async(data: list[dict]):
     body = {"valueInputOption": "USER_ENTERED", "data": data, "includeValuesInResponse": False}
     return await _request_json("POST", url, json_body=body)
 
-
+@measure_time
 # === Логи событий ===
 async def log_user_event(
     user_id: int,
@@ -228,7 +233,7 @@ async def log_user_event(
         ],
     )
 
-
+@measure_time
 async def log_payment_attempt(user_id: int, username: str | None, amount_rub: float, order_id: str, mode: str, url: str):
     queue_append(
         "payments_raw",
@@ -236,7 +241,7 @@ async def log_payment_attempt(user_id: int, username: str | None, amount_rub: fl
         [now_iso(), user_id, amount_rub, order_id, mode, url],
     )
 
-
+@measure_time
 async def log_payment_result(user_id: int, username: str | None, payment_id: str, status: str, amount_rub: float | None):
     queue_append(
         "results_raw",
@@ -244,7 +249,7 @@ async def log_payment_result(user_id: int, username: str | None, payment_id: str
         [now_iso(), user_id, payment_id, status, ("" if amount_rub is None else amount_rub)],
     )
 
-
+@measure_time
 async def log_generation(user_id: int, username: str, price_rub: float, input_type: str, prompt: str | None, file_id: str | None):
     queue_append(
         "generations_raw",
@@ -252,7 +257,7 @@ async def log_generation(user_id: int, username: str, price_rub: float, input_ty
         [now_iso(), user_id, price_rub, input_type, (prompt or ""), (file_id or "")],
     )
 
-
+@measure_time
 async def log_balance_change(
     user_id: int,
     old_balance: float,
@@ -284,7 +289,7 @@ async def log_balance_change(
         ],
     )
 
-
+@measure_time
 # === Рефералы ===
 async def log_referral(referrer_id: int, username: str | None, new_user_id: int, status: str):
     queue_append(
@@ -293,7 +298,7 @@ async def log_referral(referrer_id: int, username: str | None, new_user_id: int,
         [now_iso(), referrer_id, new_user_id, status],
     )
 
-
+@measure_time
 async def update_referrals_summary(
     user_id: int,
     invited_total: int,
@@ -308,7 +313,7 @@ async def update_referrals_summary(
         [now_iso(), user_id, invited_total, invited_paid, bonus_total],
     )
     print(f"📊 referrals_summary обновлён для user_id={user_id}")
-
+@measure_time
 # === USERS UNIQUE ===
 async def log_unique_user(user_id: int, username: str | None, full_name: str | None):
     """Добавляет юзера во вкладку 'users', если его там ещё нет."""
@@ -338,3 +343,21 @@ async def log_unique_user(user_id: int, username: str | None, full_name: str | N
 
     except Exception as e:
         print(f"⚠️ Ошибка log_unique_user: {e}")
+
+
+# === Если Google Sheets выключены (GSHEETS_ENABLE=0) — функции просто молчат ===
+if not ENABLED:
+    async def log_user_event(*args, **kwargs):
+        return None
+
+    async def log_referral(*args, **kwargs):
+        return None
+
+    async def log_balance_change(*args, **kwargs):
+        return None
+
+    async def log_generation(*args, **kwargs):
+        return None
+
+    async def start_background_flush():
+        return None
