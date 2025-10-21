@@ -223,4 +223,14 @@ if __name__ == "__main__":
     app = build_app()
     app.post_init = on_startup
     setup_shutdown_signal()
-    app.run_polling(drop_pending_updates=True)
+
+    # === определяем домен Railway ===
+    RAILWAY_URL = os.getenv("RAILWAY_STATIC_URL") or "https://photo-live.up.railway.app"
+
+    # === включаем webhook ===
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.getenv("PORT", 8080)),
+        webhook_url=f"{RAILWAY_URL}/webhook"
+    )
+
