@@ -2,7 +2,7 @@
 import time
 start_time = time.perf_counter()
 
-import os, json, asyncio, signal, logging
+import os, json, asyncio, logging
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -18,13 +18,12 @@ logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 
 # === 2. Загружаем .env до всех импортов ===
 env_path = Path(__file__).parent / ".env"
-
 load_dotenv(dotenv_path=env_path)
 
+# === 3. GCP credentials ===
 gcp_env = os.getenv("GCP_SA_JSON")
 if gcp_env:
     try:
-        # Если переменная окружения содержит JSON в виде строки — декодируем
         data = json.loads(gcp_env)
         with open("/app/gcp_sa.json", "w") as f:
             json.dump(data, f, indent=2)
@@ -36,22 +35,23 @@ else:
     print("⚠️ GCP_SA_JSON не найден в окружении.")
 
 
+# === 4. Основные импорты ===
 from services.performance_logger import measure_time
 from config import settings
 from middlewares.safe_callbacks import SafeCallbackMiddleware
-
-
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 )
 from db.database import init_db
 from services import gsheets
 
+# === 5. Автоимпорт при включённых Google Sheets ===
 auto_loop = None
 sync_dashboard_once = None
 if os.getenv("GSHEETS_ENABLE", "0") == "1":
     from services.auto_sync_dashboard import auto_loop, sync_dashboard_once
 
+# === 6. Handlers ===
 from handlers.start import (
     start, handle_consent_yes, ensure_user,
     check_balance_and_animate, reset_consent, show_main_menu
@@ -64,9 +64,10 @@ from handlers.balance import (
 )
 from handlers.instruction import show_instruction
 from handlers.support import open_support
+from utils.metrics import wrap_all_handlers
 
 
-# === 3. Отладочный вывод при старте ===
+# === 7. Отладочный вывод при старте ===
 print("=== PAYMENT CONFIG ===")
 print(f"Provider: {settings.payment_provider}")
 print(f"Mode:     {settings.payment_mode}")
@@ -83,7 +84,7 @@ print("======================")
 print("DEBUG PRICE:", settings.price_rub)
 
 
-# === 4. Построение Telegram-приложения ===
+# === 8. Построение Telegram-приложения ===
 def build_app() -> Application:
     app = Application.builder().token(settings.telegram_bot_token).build()
 
@@ -97,7 +98,6 @@ def build_app() -> Application:
         return True
 
     app.add_handler(MessageHandler(filters.ALL, safe_callback_answer), group=-1)
-
 
     # Команды
     app.add_handler(CommandHandler("start", start))
@@ -134,17 +134,14 @@ def build_app() -> Application:
         user = await ensure_user(update)
         await show_main_menu(update, context, user or update.effective_user)
 
-
-    
     app.add_handler(CallbackQueryHandler(back_menu, pattern=r"^back_menu$"))
-    from utils.metrics import wrap_all_handlers
-    # 🔎 вешаем глобальный тайминг на все уже зарегистрированные хендлеры
+
+    # Глобальный тайминг
     wrap_all_handlers(app)
     return app
 
 
-
-# === 5. Speed test ===
+# === 9. Проверка скорости цикла ===
 async def speed_test():
     t0 = time.time()
     for _ in range(5):
@@ -152,74 +149,26 @@ async def speed_test():
     print(f"⚡️ Event loop OK — {time.time() - t0:.2f} сек")
 
 
-# === 6. Startup: инициализация сервисов ===
+# === 10. Startup ===
 async def on_startup(app: Application):
-    # ⚡️ Не ждём инициализацию базы — сразу запускаем в фоне
     asyncio.create_task(init_db())
     print("✅ DB init task started")
 
-    # === Google Sheets ===
     if gsheets.ENABLED:
         print("✅ Google Sheets включены (GSHEETS_ENABLE=1)")
         asyncio.create_task(gsheets.start_background_flush())
+        asyncio.create_task(auto_loop())
     else:
         print("⚠️ Google Sheets выключены (GSHEETS_ENABLE=0)")
-
-    # === Dashboard ===
-    if gsheets.ENABLED:
-        asyncio.create_task(auto_loop())
-        print("✅ Dashboard включен (GSHEETS_ENABLE=1)")
-    else:
-        print("⚠️ Dashboard выключен (GSHEETS_ENABLE=0)")
-
-    # 🚀 Убираем задержки от debug-loop
-    asyncio.get_event_loop().set_debug(False)
 
     await speed_test()
     print("🚀 Startup complete")
 
-    # === Сводка статусов при старте ===
-    print("\n================= SYSTEM STATUS =================")
-    print(f"🧩 Database...........: {'PostgreSQL (Railway)' if settings.use_postgres else 'SQLite (Local Mode)'}")
-    print(f"📊 Google Sheets......: {'ON ✅ (GSHEETS_ENABLE=1)' if gsheets.ENABLED else 'OFF ⚠️ (GSHEETS_ENABLE=0)'}")
-    print(f"📈 Dashboard..........: {'ON ✅' if gsheets.ENABLED else 'OFF ⚠️'}")
-    print(f"💳 Payments...........: {settings.payment_provider} ({settings.payment_mode})")
-    print(f"💰 Price per gen......: {settings.price_rub} ₽")
-    print(f"🎁 Free trial.........: {'1 генерация' if getattr(settings, 'free_trial_gens', 1) else '—'}")
-    print(f"🎉 Bonus policy.......: +{getattr(settings, 'bonus_per_friend', 1)} за друга / +{getattr(settings, 'bonus_per_10', 2)} за 10 оплат")
-    print(f"📦 Packs available....: {', '.join([f'{p}₽' for p in settings.packs])}")
-    print(f"⚙️  Engine Mode........: {'Production 🚀' if settings.payment_mode.upper() == 'PROD' else 'Test 🧪'}")
-    print("=================================================\n")
 
-
-
-# === 7. Корректное завершение ===
-async def shutdown_tasks():
-    print("🛑 Shutting down gracefully...")
-    tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-    for t in tasks:
-        t.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
-    print("✅ All tasks cancelled")
-
-
-def setup_shutdown_signal():
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    else:
-        # если уже есть — просто добавляем хендлеры
-        pass
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown_tasks()))
-
+# === 11. Webhook автообновление ===
 async def auto_set_webhook(app: Application):
     RAILWAY_URL = os.getenv("RAILWAY_STATIC_URL") or "https://photo-live.up.railway.app"
     webhook_url = f"{RAILWAY_URL}/webhook"
-
     current = await app.bot.get_webhook_info()
     if current.url != webhook_url:
         await app.bot.set_webhook(url=webhook_url)
@@ -228,19 +177,15 @@ async def auto_set_webhook(app: Application):
         print(f"✅ Webhook уже актуален: {webhook_url}")
 
 
-
-# === 8. Точка входа ===
-# === 8. Точка входа ===
-if __name__ == "__main__":
+# === 12. Основная функция ===
+async def main():
     app = build_app()
     app.post_init = on_startup
-    setup_shutdown_signal()
 
-    # Сначала обновляем webhook (однократно)
-    asyncio.run(auto_set_webhook(app))
+    await auto_set_webhook(app)
 
-    # 🚀 Запускаем Telegram webhook — без asyncio.run(), Railway сам управляет event loop
-    app.run_webhook(
+    print("🚀 Bot starting via webhook...")
+    await app.run_webhook(
         listen="0.0.0.0",
         port=int(os.getenv("PORT", 8080)),
         url_path="webhook",
@@ -248,3 +193,9 @@ if __name__ == "__main__":
     )
 
 
+# === 13. Точка входа ===
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        print("🛑 Завершение работы бота...")
