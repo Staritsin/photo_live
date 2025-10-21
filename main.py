@@ -238,6 +238,13 @@ if __name__ == "__main__":
     # === автопроверка вебхука ===
     asyncio.run(auto_set_webhook(app))
 
+    # === создаём event loop вручную для Python 3.12 ===
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
     # === запуск бота ===
     app.run_webhook(
         listen="0.0.0.0",
