@@ -235,22 +235,19 @@ if __name__ == "__main__":
     app.post_init = on_startup
     setup_shutdown_signal()
 
-    # === автопроверка вебхука ===
-    asyncio.run(auto_set_webhook(app))
+    async def prepare_and_run():
+        # === автопроверка вебхука ===
+        await auto_set_webhook(app)
 
-    # === создаём event loop вручную для Python 3.12 ===
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # === запуск бота ===
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=int(os.getenv("PORT", 8080)),
+            url_path="webhook",
+            webhook_url=f"{os.getenv('RAILWAY_STATIC_URL') or 'https://photo-live.up.railway.app'}/webhook"
+        )
 
-    # === запуск бота ===
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.getenv("PORT", 8080)),
-        url_path="webhook",
-        webhook_url=f"{os.getenv('RAILWAY_STATIC_URL') or 'https://photo-live.up.railway.app'}/webhook"
-    )
+    # Запускаем через единый event loop
+    asyncio.run(prepare_and_run())
 
 
