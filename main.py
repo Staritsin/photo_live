@@ -27,6 +27,16 @@ logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 
 # === 2. Загружаем .env до всех импортов ===
 env_path = Path(__file__).parent / ".env"
+
+import json
+
+# === Автоматическое создание файла gcp_sa.json из переменной окружения ===
+gcp_json = os.getenv("GCP_SA_JSON")
+if gcp_json:
+    with open("/app/gcp_sa.json", "w") as f:
+        f.write(gcp_json)
+
+
 load_dotenv(dotenv_path=env_path)
 
 from telegram.ext import (
