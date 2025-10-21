@@ -235,15 +235,14 @@ if __name__ == "__main__":
     app.post_init = on_startup
     setup_shutdown_signal()
 
-    async def main():
-        # === Проверка/обновление вебхука ===
-        await auto_set_webhook(app)
-        # === Запуск бота ===
-        await app.run_webhook(
-            listen="0.0.0.0",
-            port=int(os.getenv("PORT", 8080)),
-            url_path="webhook",
-            webhook_url=f"{os.getenv('RAILWAY_STATIC_URL') or 'https://photo-live.up.railway.app'}/webhook"
-        )
+    # 🚀 Проверяем/обновляем вебхук перед запуском
+    asyncio.run(auto_set_webhook(app))
 
-    asyncio.run(main())
+    # 🚀 Запускаем БЕЗ await — просто вызываем
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.getenv("PORT", 8080)),
+        url_path="webhook",
+        webhook_url=f"{os.getenv('RAILWAY_STATIC_URL') or 'https://photo-live.up.railway.app'}/webhook"
+    )
+
