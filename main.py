@@ -3,6 +3,19 @@ import time
 start_time = time.perf_counter()
 
 import os
+import json
+
+# === 0. Создание файла GCP JSON (до всех импортов) ===
+gcp_json = os.getenv("GCP_SA_JSON")
+if gcp_json:
+    with open("/app/gcp_sa.json", "w") as f:
+        f.write(gcp_json)
+    print("✅ GCP credentials file created.")
+else:
+    print("⚠️ GCP_SA_JSON not found in env.")
+
+
+
 from services.performance_logger import measure_time
 
 
@@ -27,15 +40,6 @@ logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 
 # === 2. Загружаем .env до всех импортов ===
 env_path = Path(__file__).parent / ".env"
-
-import json
-
-# === Автоматическое создание файла gcp_sa.json из переменной окружения ===
-gcp_json = os.getenv("GCP_SA_JSON")
-if gcp_json:
-    with open("/app/gcp_sa.json", "w") as f:
-        f.write(gcp_json)
-
 
 load_dotenv(dotenv_path=env_path)
 
