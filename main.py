@@ -227,32 +227,38 @@ async def auto_set_webhook(app: Application):
 
 
 
-# === 8. Точка входа (обновлённая для Railway) ===
+# === 8. Точка входа (надёжная версия для Railway) ===
+from fastapi import FastAPI, Request
+import uvicorn
+from telegram import Update as TgUpdate
+
+fastapi_app = FastAPI()
+ptb_app: Application | None = None  # PTB-приложение (глобальная ссылка)
+
+@fastapi_app.post("/webhook")
+async def webhook_handler(req: Request):
+    if ptb_app is None:
+        return {"ok": False, "error": "bot not ready"}
+    data = await req.json()
+    update = TgUpdate.de_json(data, ptb_app.bot)
+    await ptb_app.update_queue.put(update)
+    return {"ok": True}
+
+@fastapi_app.get("/")
+async def root():
+    return {"status": "ok", "message": "Bot is running"}
+
 async def main():
-    app = build_app()
-    app.post_init = on_startup
-    setup_shutdown_signal()  # корректная установка сигналов SIGINT/SIGTERM
+    global ptb_app
+    ptb_app = build_app()
+    ptb_app.post_init = on_startup
 
-    # 🔗 автообновляем вебхук перед запуском
-    await auto_set_webhook(app)
+    await ptb_app.initialize()
+    await ptb_app.start()
+    await ptb_app.bot.set_webhook(url=f"{os.getenv('BASE_PUBLIC_URL')}/webhook")
+    print(f"✅ Webhook set to {os.getenv('BASE_PUBLIC_URL')}/webhook")
 
-    # 🚀 запускаем приложение в режиме вебхука (Railway)
-    print("🚀 Bot starting via webhook...")
-    await app.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.getenv("PORT", 8080)),
-        url_path="webhook",
-        webhook_url=f"{os.getenv('RAILWAY_STATIC_URL') or 'https://photo-live.up.railway.app'}/webhook",
-    )
+    # Поднимаем uvicorn HTTP сервер
+    uvicorn.run(fastapi_app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
 
-
-if __name__ == "__main__":
-    import nest_asyncio
-    nest_asyncio.apply()  # ✅ фикс для Railway (loop reuse)
-
-    loop = asyncio.get_event_loop()
-    try:
-        loop.run_until_complete(main())
-    except (KeyboardInterrupt, SystemExit):
-        print("🛑 Завершение работы бота...")
 
