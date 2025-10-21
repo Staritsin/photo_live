@@ -262,3 +262,24 @@ async def main():
     uvicorn.run(fastapi_app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
 
 
+if __name__ == "__main__":
+    import nest_asyncio
+    nest_asyncio.apply()
+
+    loop = asyncio.get_event_loop()
+    try:
+        # запускаем FastAPI сервер в отдельном таске
+        from threading import Thread
+        def run_server():
+            uvicorn.run("main:fastapi_app", host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
+
+        Thread(target=run_server, daemon=True).start()
+
+        # запускаем бота
+        loop.run_until_complete(main())
+
+    except (KeyboardInterrupt, SystemExit):
+        print("🛑 Завершение работы бота...")
+
+
+
