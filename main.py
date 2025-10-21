@@ -231,22 +231,22 @@ async def auto_set_webhook(app: Application):
 
 # === 8. Точка входа ===
 # === 8. Точка входа ===
-async def main():
+if __name__ == "__main__":
     app = build_app()
     app.post_init = on_startup
     setup_shutdown_signal()
 
-    # Обновляем вебхук
-    await auto_set_webhook(app)
-    
-    # Запускаем приложение в режиме вебхука
-    await app.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.getenv("PORT", 8080)),
-        url_path="webhook",
-        webhook_url=f"{os.getenv('RAILWAY_STATIC_URL') or 'https://photo-live.up.railway.app'}/webhook",
-    )
+    async def start():
+        await auto_set_webhook(app)
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=int(os.getenv("PORT", 8080)),
+            url_path="webhook",
+            webhook_url=f"{os.getenv('RAILWAY_STATIC_URL') or 'https://photo-live.up.railway.app'}/webhook",
+        )
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    # 🚀 Запускаем без asyncio.run — Railway сам держит event loop
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(start())
+
 
