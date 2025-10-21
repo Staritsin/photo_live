@@ -235,17 +235,16 @@ if __name__ == "__main__":
     app.post_init = on_startup
     setup_shutdown_signal()
 
-    async def prepare_and_run():
+    async def prepare():
         await auto_set_webhook(app)
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=int(os.getenv("PORT", 8080)),
-            url_path="webhook",
-            webhook_url=f"{os.getenv('RAILWAY_STATIC_URL') or 'https://photo-live.up.railway.app'}/webhook"
-        )
 
-    # Запускаем без asyncio.run (чтобы PTB сам управлял циклом)
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(prepare_and_run())
+    # 🚀 1. Проверяем/обновляем вебхук перед запуском
+    asyncio.run(prepare())
 
+    # 🚀 2. Запускаем Telegram webhook — без asyncio.run()
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.getenv("PORT", 8080)),
+        url_path="webhook",
+        webhook_url=f"{os.getenv('RAILWAY_STATIC_URL') or 'https://photo-live.up.railway.app'}/webhook"
+    )
