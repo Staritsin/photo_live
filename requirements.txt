@@ -3,6 +3,8 @@ python-telegram-bot[webhooks]==21.7
 pydantic==2.9.2
 pydantic-settings==2.3.4
 python-dotenv==1.0.1
+nest_asyncio==1.6.0
+
 
 # === Асинхронные БД ===
 SQLAlchemy==2.0.34
