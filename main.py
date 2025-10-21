@@ -134,11 +134,9 @@ def build_app() -> Application:
         user = await ensure_user(update)
         await show_main_menu(update, context, user or update.effective_user)
 
-
-    
     app.add_handler(CallbackQueryHandler(back_menu, pattern=r"^back_menu$"))
+
     from utils.metrics import wrap_all_handlers
-    # 🔎 вешаем глобальный тайминг на все уже зарегистрированные хендлеры
     wrap_all_handlers(app)
     return app
 
