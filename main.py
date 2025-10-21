@@ -231,6 +231,8 @@ if __name__ == "__main__":
     app.run_webhook(
         listen="0.0.0.0",
         port=int(os.getenv("PORT", 8080)),
+        url_path="webhook",  # <--- добавили
         webhook_url=f"{RAILWAY_URL}/webhook"
     )
+
 
