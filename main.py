@@ -2,32 +2,9 @@
 import time
 start_time = time.perf_counter()
 
-import os
-import json
-
-# === 0. Создание файла GCP JSON (до всех импортов) ===
-gcp_json = os.getenv("GCP_SA_JSON")
-if gcp_json:
-    with open("/app/gcp_sa.json", "w") as f:
-        f.write(gcp_json)
-    print("✅ GCP credentials file created.")
-else:
-    print("⚠️ GCP_SA_JSON not found in env.")
-
-
-
-from services.performance_logger import measure_time
-
-
-from config import settings
-
-
-import asyncio
-import signal
-import logging
+import os, json, asyncio, signal, logging
 from pathlib import Path
 from dotenv import load_dotenv
-from middlewares.safe_callbacks import SafeCallbackMiddleware
 
 # === 1. Логи (чистые, без мусора) ===
 logging.basicConfig(
@@ -38,17 +15,43 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 
+
 # === 2. Загружаем .env до всех импортов ===
 env_path = Path(__file__).parent / ".env"
 
 load_dotenv(dotenv_path=env_path)
+
+gcp_env = os.getenv("GCP_SA_JSON")
+if gcp_env:
+    try:
+        # Если переменная окружения содержит JSON в виде строки — декодируем
+        data = json.loads(gcp_env)
+        with open("/app/gcp_sa.json", "w") as f:
+            json.dump(data, f, indent=2)
+        print("✅ GCP credentials file created.")
+    except json.JSONDecodeError as e:
+        print(f"❌ Ошибка JSON: {e}")
+        print("⚠️ Проверь формат переменной GCP_SA_JSON в Railway (она должна быть валидным JSON).")
+else:
+    print("⚠️ GCP_SA_JSON не найден в окружении.")
+
+
+from services.performance_logger import measure_time
+from config import settings
+from middlewares.safe_callbacks import SafeCallbackMiddleware
+
 
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 )
 from db.database import init_db
 from services import gsheets
-from services.auto_sync_dashboard import auto_loop, sync_dashboard_once
+
+auto_loop = None
+sync_dashboard_once = None
+if os.getenv("GSHEETS_ENABLE", "0") == "1":
+    from services.auto_sync_dashboard import auto_loop, sync_dashboard_once
+
 from handlers.start import (
     start, handle_consent_yes, ensure_user,
     check_balance_and_animate, reset_consent, show_main_menu
