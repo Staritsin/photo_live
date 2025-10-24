@@ -269,7 +269,7 @@ async def main():
     await ptb_app.start()
 
     # 💡 Добавляем паузу, чтобы ptb_app был полностью готов
-    await asyncio.sleep(2)
+    await asyncio.sleep(5)
 
     # Определяем домен в зависимости от окружения
     public_url = os.getenv("BASE_PUBLIC_URL")
