@@ -269,7 +269,7 @@ async def main():
     await ptb_app.start()
 
     # 💡 Добавляем паузу, чтобы ptb_app был полностью готов
-    await asyncio.sleep(10)
+    await asyncio.sleep(20)
 
     # Определяем домен в зависимости от окружения
     public_url = os.getenv("BASE_PUBLIC_URL")
@@ -291,6 +291,8 @@ async def main():
             print("⚠️ BASE_PUBLIC_URL не найден, используем локальный адрес")
     
     webhook_url = f"{public_url}/webhook"
+    await ptb_app.bot.delete_webhook(drop_pending_updates=True)
+
     await ptb_app.bot.set_webhook(url=webhook_url)
     print(f"✅ Webhook установлен: {webhook_url}")
 
