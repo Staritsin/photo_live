@@ -235,47 +235,55 @@ import asyncio
 
 fastapi_app = FastAPI()
 ptb_app: Application | None = None
-_ptb_ready = asyncio.Event()  # сигнал, что бот готов
+_ptb_ready = asyncio.Event()  # флаг готовности PTB
 
 @fastapi_app.on_event("startup")
 async def on_fastapi_start():
+    """Запуск Telegram-приложения при старте FastAPI (Render)."""
     asyncio.create_task(start_telegram_app())
 
 async def start_telegram_app():
     global ptb_app
-    ptb_app = build_app()
-    ptb_app.post_init = on_startup
-
-    await ptb_app.initialize()
-    await ptb_app.start()
-
-    # ждем полной инициализации
-    while not ptb_app.running:
-        print("⏳ Ожидаем запуск Telegram-приложения...")
-        await asyncio.sleep(2)
-
-    public_url = os.getenv("BASE_PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL") or "https://photo-live.onrender.com"
-    webhook_url = f"{public_url}/webhook"
-
-    # удаляем старый вебхук и ставим новый
     try:
-        await ptb_app.bot.delete_webhook(drop_pending_updates=True)
+        ptb_app = build_app()
+        ptb_app.post_init = on_startup
+
+        await ptb_app.initialize()
+        await ptb_app.start()
+
+        # Ждём, пока PTB реально запустится
+        while not ptb_app.running:
+            print("⏳ Ожидаем запуск Telegram-приложения...")
+            await asyncio.sleep(2)
+
+        # === Настройка Webhook ===
+        public_url = (
+            os.getenv("RENDER_EXTERNAL_URL")
+            or os.getenv("BASE_PUBLIC_URL")
+            or "https://photo-live.onrender.com"
+        )
+        webhook_url = f"{public_url}/webhook"
+
+        try:
+            await ptb_app.bot.delete_webhook(drop_pending_updates=True)
+        except Exception as e:
+            print("⚠️ delete_webhook error:", e)
+
+        await ptb_app.bot.set_webhook(url=webhook_url)
+        print(f"✅ Webhook установлен: {webhook_url}")
+
+        _ptb_ready.set()
+        print("🚀 Telegram бот полностью готов к работе!")
+
     except Exception as e:
-        print("⚠️ delete_webhook error:", e)
-
-    await ptb_app.bot.set_webhook(url=webhook_url)
-    print(f"✅ Webhook установлен: {webhook_url}")
-
-    _ptb_ready.set()
-    print("🚀 Telegram бот полностью готов к работе!")
-
+        print(f"❌ Ошибка при запуске Telegram-приложения: {e}")
 
 @fastapi_app.post("/webhook")
 async def webhook_handler(req: Request):
+    """Обработка апдейтов от Telegram."""
     data = await req.json()
     print("📩 Webhook hit:", data.get("message", {}).get("text"))
 
-    # если бот не готов — ждём секунду
     if not _ptb_ready.is_set():
         await asyncio.sleep(1)
 
@@ -284,12 +292,11 @@ async def webhook_handler(req: Request):
         await ptb_app.update_queue.put(update)
     else:
         print("⚠️ ptb_app not ready yet")
-    return {"ok": True}
 
+    return {"ok": True}
 
 @fastapi_app.get("/")
 async def root():
-    return {"status": "ok", "message": "Bot is running"}
+    """Проверка статуса на Render."""
+    return {"status": "ok", "message": "Bot is running on Render 🚀"}
 
-async def root():
-    return {"status": "ok", "message": "Bot is running"}
