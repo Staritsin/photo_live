@@ -247,40 +247,48 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, use
         )],
     ])
 
-        # ---- отправка ----
-    video_path = "assets/main_menu_video.mp4"
-
-    try:
-        # если уже знаем file_id — шлём мгновенно, без загрузки файла
-        if FILE_ID_PATH.exists():
-            file_id = FILE_ID_PATH.read_text().strip()
-            msg = await update.effective_chat.send_video(
-                video=file_id,
-                caption=text,
-                parse_mode="Markdown",
-                reply_markup=kb
-            )
-        else:
-            # первый раз — загрузим файл, возьмём file_id и закэшируем
-            msg = await update.effective_chat.send_video(
-                video=open(video_path, "rb"),
-                caption=text,
-                parse_mode="Markdown",
-                reply_markup=kb
-            )
-            try:
-                fid = msg.video.file_id
-                FILE_ID_PATH.write_text(fid)
-                print(f"💾 Saved main_menu_video file_id: {fid}")
-            except Exception as e:
-                print("⚠️ Не удалось сохранить file_id:", e)
-
-    except Exception as e:
-        print("⚠️ send_video fallback:", e)
-        await send_or_replace_text(update, context, text, reply_markup=kb)
-
-    print(f"⚡️ Время выполнения show_main_menu(): {time.perf_counter() - start_time:.2f} сек")
-
+        # === Быстрое приветственное видео ===
+        try:
+            from pathlib import Path
+            import aiofiles
+    
+            video_id_path = Path("assets/main_menu_video.id")
+    
+            if video_id_path.exists():
+                # ⚡ используем кэшированный file_id (мгновенно)
+                async with aiofiles.open(video_id_path, "r") as f:
+                    file_id = (await f.read()).strip()
+    
+                await update.effective_chat.send_chat_action("upload_video")
+                await update.effective_chat.send_video(
+                    video=file_id,
+                    caption=text,
+                    parse_mode="Markdown",
+                    reply_markup=kb
+                )
+    
+            else:
+                # 📥 если нет file_id — грузим mp4, сохраняем id
+                video_path = Path("assets/main_menu_video.mp4")
+                msg = await update.effective_chat.send_video(
+                    video=open(video_path, "rb"),
+                    caption=text,
+                    parse_mode="Markdown",
+                    reply_markup=kb
+                )
+                try:
+                    fid = msg.video.file_id
+                    video_id_path.write_text(fid)
+                    print(f"💾 Saved new video file_id: {fid}")
+                except Exception as e:
+                    print(f"⚠️ Ошибка сохранения file_id: {e}")
+    
+        except Exception as e:
+            print(f"⚠️ send_video fallback: {e}")
+            await send_or_replace_text(update, context, text, reply_markup=kb)
+    
+        print(f"⚡️ Время выполнения show_main_menu(): {time.perf_counter() - start_time:.2f} сек")
+    
 
 # === Обработка согласия ===
 async def handle_consent_yes(update: Update, context: ContextTypes.DEFAULT_TYPE):
