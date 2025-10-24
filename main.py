@@ -257,8 +257,10 @@ async def main():
 
     await ptb_app.initialize()
     await ptb_app.start()
-    await ptb_app.bot.set_webhook(url=f"{os.getenv('BASE_PUBLIC_URL')}/webhook")
-    print(f"✅ Webhook set to {os.getenv('BASE_PUBLIC_URL')}/webhook")
+    RAILWAY_URL = os.getenv("BASE_PUBLIC_URL") or "https://photo-live.up.railway.app"
+    await ptb_app.bot.set_webhook(url=f"{RAILWAY_URL}/webhook")
+    print(f"✅ Webhook установлен: {RAILWAY_URL}/webhook")
+
 
     # 🚀 тут не uvicorn.run(), а просто оставляем бот активным
     await asyncio.Event().wait()  # держим loop живым
