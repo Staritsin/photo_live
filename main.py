@@ -234,33 +234,15 @@ from telegram import Update as TgUpdate
 from threading import Thread
 
 fastapi_app = FastAPI()
-ptb_app: Application | None = None  # PTB-приложение (глобальная ссылка)
+ptb_app: Application | None = None
+_ptb_ready = asyncio.Event()  # флажок готовности
 
-@fastapi_app.post("/webhook")
-async def webhook_handler(req: Request):
-    try:
-        data = await req.json()
-        print("📩 Webhook hit:", data.get("message", {}).get("text"))
+@fastapi_app.on_event("startup")
+async def _startup():
+    # Стартуем Telegram-приложение ПРИ ЗАПУСКЕ uvicorn
+    asyncio.create_task(_start_ptb())
 
-        # ✅ Telegram всегда получит 200 ОК
-        if ptb_app and ptb_app.bot:
-            update = TgUpdate.de_json(data, ptb_app.bot)
-            await ptb_app.update_queue.put(update)
-        else:
-            print("⚠️ ptb_app not ready yet")
-
-        return {"ok": True}  # Telegram доволен
-    except Exception as e:
-        print("⚠️ Webhook error:", e)
-        return {"ok": True}  # даже при ошибке Telegram получит 200
-
-
-@fastapi_app.get("/")
-async def root():
-    return {"status": "ok", "message": "Bot is running"}
-
-
-async def main():
+async def _start_ptb():
     global ptb_app
     ptb_app = build_app()
     ptb_app.post_init = on_startup
@@ -268,39 +250,47 @@ async def main():
     await ptb_app.initialize()
     await ptb_app.start()
 
-    # 💡 Добавляем паузу, чтобы ptb_app был полностью готов
-    await asyncio.sleep(20)
+    # Подождём полной готовности PTB
+    await asyncio.sleep(5)
+    while not ptb_app.running:
+        print("⏳ Ожидаем запуск Telegram-приложения...")
+        await asyncio.sleep(2)
+    print("✅ Telegram-приложение полностью готово!")
 
-    # Определяем домен в зависимости от окружения
+    # Определяем домен и ставим вебхук
     public_url = os.getenv("BASE_PUBLIC_URL")
-    
     if not public_url:
-        # если нет — пытаемся догадаться по названию хоста
-        render_url = os.getenv("RENDER_EXTERNAL_URL")
-        railway_url = os.getenv("RAILWAY_STATIC_URL")
-    
-        if render_url:
-            public_url = render_url
-            print(f"🌐 Detected Render environment: {public_url}")
-        elif railway_url:
-            public_url = railway_url
-            print(f"🌐 Detected Railway environment: {public_url}")
-        else:
-            # запасной вариант
-            public_url = "https://photo-live.local"
-            print("⚠️ BASE_PUBLIC_URL не найден, используем локальный адрес")
-    
+        public_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("RAILWAY_STATIC_URL") or "https://photo-live.local"
     webhook_url = f"{public_url}/webhook"
-    await ptb_app.bot.delete_webhook(drop_pending_updates=True)
+
+    # Сносим старый вебхук, чтобы TG не слал ранние апдейты
+    try:
+        await ptb_app.bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        print("⚠️ delete_webhook error:", e)
 
     await ptb_app.bot.set_webhook(url=webhook_url)
     print(f"✅ Webhook установлен: {webhook_url}")
 
+    _ptb_ready.set()
 
-    await asyncio.Event().wait()
+@fastapi_app.post("/webhook")
+async def webhook_handler(req: Request):
+    # Принимаем апдейты всегда, даже если PTB ещё стартует
+    data = await req.json()
+    print("📩 Webhook hit:", data.get("message", {}).get("text"))
 
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    if ptb_app and ptb_app.bot:
+        update = TgUpdate.de_json(data, ptb_app.bot)
+        # Если PTB ещё не готов – немного подождём (не блокируя TG)
+        if not _ptb_ready.is_set():
+            await asyncio.sleep(1)
+        await ptb_app.update_queue.put(update)
+    else:
+        print("⚠️ ptb_app not ready yet")
 
+    return {"ok": True}
 
+@fastapi_app.get("/")
+async def root():
+    return {"status": "ok", "message": "Bot is running"}
