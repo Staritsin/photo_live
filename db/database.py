@@ -12,12 +12,28 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy import event, inspect
 from contextlib import asynccontextmanager
 from config import settings
+import os
+
+# === Универсальный FIX для Render / Railway ===
+db_url = os.getenv("DATABASE_URL", "") or settings.async_database_url
+
+if "render.com" in os.getenv("RENDER", "") or "onrender.com" in db_url:
+    # Render: asyncpg не понимает sslmode — убираем
+    if "sslmode" in db_url:
+        db_url = db_url.split("?")[0]
+        print("⚙️ Render detected — убираем sslmode из DATABASE_URL")
+elif "railway" in db_url:
+    # Railway: добавляем sslmode=require если его нет
+    if "sslmode" not in db_url:
+        db_url += "?sslmode=require"
+        print("⚙️ Railway detected — добавляем sslmode=require")
+
+os.environ["DATABASE_URL"] = db_url
 
 # === Базовый класс моделей ===
 Base = declarative_base()
 
 # === Определяем тип базы ===
-db_url = settings.async_database_url
 is_sqlite = "sqlite" in db_url.lower()
 
 # === SSL и параметры движка ===
@@ -27,7 +43,6 @@ ssl_context.verify_mode = ssl.CERT_NONE
 
 connect_args = {
     "ssl": ssl_context,
-    "server_settings": {"sslmode": "require"}  # 🔹 добавляем SSL-режим принудительно
 }
 
 # === Основные параметры подключения ===
@@ -40,11 +55,11 @@ engine_kwargs = dict(
 # ⚙️ Для PostgreSQL включаем пул соединений
 if not is_sqlite:
     engine_kwargs.update(
-        pool_size=20,         # 🔹 держим 20 постоянных соединений
-        max_overflow=10,      # 🔹 до 10 временных при пиках
-        pool_timeout=15,      # 🔹 15 сек ожидания при блокировке пула
-        pool_recycle=300,     # 🔹 обновление каждые 5 минут
-        pool_pre_ping=True,   # 🔹 проверка «живых» коннектов
+        pool_size=20,
+        max_overflow=10,
+        pool_timeout=15,
+        pool_recycle=300,
+        pool_pre_ping=True,
     )
 
 # === Создаём движок ===
