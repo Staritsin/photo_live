@@ -297,11 +297,10 @@ async def main():
 
     await asyncio.Event().wait()
 
-
-
 if __name__ == "__main__":
-    import nest_asyncio
-    nest_asyncio.apply()
+    import asyncio
+    asyncio.run(main())
+
 
     # 💡 запускаем uvicorn в отдельном потоке
     def run_server():
