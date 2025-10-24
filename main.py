@@ -239,16 +239,19 @@ ptb_app: Application | None = None  # PTB-приложение (глобальн
 @fastapi_app.post("/webhook")
 async def webhook_handler(req: Request):
     try:
-        if ptb_app is None or ptb_app.bot is None:
-            return {"ok": True, "message": "bot not ready yet"}  # 👈 Telegram получит 200 OK
+        # Telegram лог
+        print("📩 Webhook hit!")
 
+        # ✅ всегда отдаём 200 OK (чтобы Telegram не считал это ошибкой)
         data = await req.json()
-        update = TgUpdate.de_json(data, ptb_app.bot)
-        await ptb_app.update_queue.put(update)
+        if ptb_app and ptb_app.bot:
+            update = TgUpdate.de_json(data, ptb_app.bot)
+            await ptb_app.update_queue.put(update)
         return {"ok": True}
     except Exception as e:
         print("⚠️ Webhook error:", e)
-        return {"ok": True}  # 👈 даже при ошибке Telegram получит 200
+        return {"ok": True}  # Telegram получит 200 OK даже при ошибке
+
 
 
 @fastapi_app.get("/")
