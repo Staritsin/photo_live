@@ -271,9 +271,29 @@ async def main():
     # 💡 Добавляем паузу, чтобы ptb_app был полностью готов
     await asyncio.sleep(2)
 
-    RAILWAY_URL = os.getenv("BASE_PUBLIC_URL") or "https://photo-live.up.railway.app"
-    await ptb_app.bot.set_webhook(url=f"{RAILWAY_URL}/webhook")
-    print(f"✅ Webhook установлен: {RAILWAY_URL}/webhook")
+    # Определяем домен в зависимости от окружения
+    public_url = os.getenv("BASE_PUBLIC_URL")
+    
+    if not public_url:
+        # если нет — пытаемся догадаться по названию хоста
+        render_url = os.getenv("RENDER_EXTERNAL_URL")
+        railway_url = os.getenv("RAILWAY_STATIC_URL")
+    
+        if render_url:
+            public_url = render_url
+            print(f"🌐 Detected Render environment: {public_url}")
+        elif railway_url:
+            public_url = railway_url
+            print(f"🌐 Detected Railway environment: {public_url}")
+        else:
+            # запасной вариант
+            public_url = "https://photo-live.local"
+            print("⚠️ BASE_PUBLIC_URL не найден, используем локальный адрес")
+    
+    webhook_url = f"{public_url}/webhook"
+    await ptb_app.bot.set_webhook(url=webhook_url)
+    print(f"✅ Webhook установлен: {webhook_url}")
+
 
     await asyncio.Event().wait()
 
