@@ -300,3 +300,13 @@ async def root():
     """Проверка статуса на Render."""
     return {"status": "ok", "message": "Bot is running on Render 🚀"}
 
+
+# === 9. Точка входа для Render (запуск FastAPI сервера) ===
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8080))
+    print(f"🚀 Запуск FastAPI на порту {port} (Render PROD)")
+    uvicorn.run("main:fastapi_app", host="0.0.0.0", port=port)
+
+
+
